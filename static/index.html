@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Coinstorm</title>
+<meta name="description" content="Coin toss simulator with exact statistics">
+<meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14171f" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Coinstorm">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/app.css">
+<script src="/vendor/chart.umd.min.js" defer></script>
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <button id="back" class="back" hidden aria-label="Back to log">‹ Log</button>
+  <h1 id="title">Toss</h1>
+</header>
+
+<main>
+  <!-- TOSS -->
+  <section id="view-toss" class="view">
+    <form id="toss-form" class="card" autocomplete="off" novalidate>
+      <label for="n-input" class="field-label">Number of tosses</label>
+      <input id="n-input" class="big-input" inputmode="numeric" enterkeyhint="go"
+             placeholder="1,000" aria-describedby="n-help">
+      <div id="n-help" class="hint">1 to 2,147,483,647</div>
+      <div class="quick" role="group" aria-label="Quick picks">
+        <button type="button" data-n="10">10</button>
+        <button type="button" data-n="100">100</button>
+        <button type="button" data-n="1000">1K</button>
+        <button type="button" data-n="1000000">1M</button>
+        <button type="button" data-n="100000000">100M</button>
+        <button type="button" data-n="2147483647">MAX</button>
+      </div>
+      <label for="label-input" class="field-label">Label <span class="muted">(optional)</span></label>
+      <input id="label-input" class="text-input" maxlength="80" placeholder="e.g. Lucky Friday" enterkeyhint="go">
+      <button id="toss-btn" class="primary" type="submit">Toss</button>
+      <div id="toss-error" class="error" role="alert" hidden></div>
+    </form>
+
+    <div id="anim" class="card anim" hidden>
+      <div class="coin-stage"><div id="coin" class="coin"><div class="face h">H</div><div class="face t">T</div></div></div>
+      <div id="anim-strip" class="chips"></div>
+    </div>
+
+    <div id="job" class="card" hidden>
+      <div class="job-head"><strong>Tossing…</strong><span id="job-pct" class="num">0%</span></div>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div id="job-bar"></div></div>
+      <div class="job-meta"><span id="job-count" class="num"></span><span id="job-eta"></span></div>
+    </div>
+
+    <div id="toss-result"></div>
+  </section>
+
+  <!-- LOG -->
+  <section id="view-log" class="view" hidden>
+    <div class="filters">
+      <select id="log-sort" aria-label="Sort">
+        <option value="date_desc">Newest</option>
+        <option value="date_asc">Oldest</option>
+        <option value="size_desc">Largest</option>
+        <option value="size_asc">Smallest</option>
+      </select>
+      <select id="log-size" aria-label="Filter by size">
+        <option value="">All sizes</option>
+        <option value="0-1000">≤ 1K</option>
+        <option value="1001-1000000">1K – 1M</option>
+        <option value="1000001-">&gt; 1M</option>
+      </select>
+    </div>
+    <div id="log-count" class="hint"></div>
+    <ul id="log-list" class="log-list"></ul>
+    <button id="log-more" class="secondary" hidden>Load more</button>
+    <div id="log-empty" class="empty" hidden>No sessions yet. Toss some coins!</div>
+  </section>
+
+  <!-- SESSION DETAIL -->
+  <section id="view-session" class="view" hidden>
+    <div id="session-body"></div>
+    <button id="session-delete" class="danger">Delete session</button>
+  </section>
+
+  <!-- STATS -->
+  <section id="view-stats" class="view" hidden>
+    <div id="stats-body"></div>
+  </section>
+</main>
+
+<nav class="tabbar" aria-label="Sections">
+  <a href="#toss" data-tab="toss"><span class="ico" aria-hidden="true">◉</span>Toss</a>
+  <a href="#log" data-tab="log"><span class="ico" aria-hidden="true">☰</span>Log</a>
+  <a href="#stats" data-tab="stats"><span class="ico" aria-hidden="true">▤</span>Stats</a>
+</nav>
+
+<dialog id="confirm">
+  <form method="dialog">
+    <p id="confirm-text"></p>
+    <div class="dialog-actions">
+      <button value="cancel" class="secondary">Cancel</button>
+      <button value="ok" class="danger">Delete</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
