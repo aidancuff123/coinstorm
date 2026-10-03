@@ -199,6 +199,46 @@ select { padding: 0 12px; font-size: 16px; width: 100%; }
 .records .rk { color: var(--text-2); font-size: 0.85rem; }
 .records .rv { font-weight: 600; }
 
+/* Mode switch */
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface-2); margin-bottom: 6px; }
+.seg button { min-height: 40px; border: 0; border-radius: 9px; background: transparent; font-weight: 600; color: var(--text-2); cursor: pointer; }
+.seg button[aria-checked="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
+.mode-help { margin: 0 2px 12px; }
+
+/* Pick mode */
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0 6px; }
+.pick-coin {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 8px;
+  border: 2px solid var(--border); border-radius: 18px; background: var(--surface-2); cursor: pointer;
+  min-height: 150px; touch-action: manipulation; transition: border-color 0.15s, opacity 0.15s, transform 0.15s;
+}
+.pick-coin:active { transform: scale(0.97); }
+.pick-coin .pc-face {
+  width: 96px; height: 96px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 2.6rem; font-weight: 800; color: #14171f;
+  border: 5px solid #b8860b; background: radial-gradient(circle at 35% 30%, #ffe27a, #e0a81a);
+}
+.pick-coin .pc-name { color: var(--text-2); font-weight: 600; font-size: 0.9rem; }
+.pick-coin.h .pc-face { box-shadow: 0 0 0 4px var(--surface-2), 0 0 0 7px var(--heads); }
+.pick-coin.t .pc-face { box-shadow: 0 0 0 4px var(--surface-2), 0 0 0 7px var(--tails); }
+.pick-coin.chosen { border-color: var(--accent); }
+.pick-coin.passed { opacity: 0.35; }
+.pick-coin.deal .pc-face { animation: deal 0.28s ease-out; }
+@keyframes deal { from { transform: rotateY(90deg); } to { transform: rotateY(0); } }
+.pick-hint { text-align: center; }
+.pick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.pick-actions button { margin: 0; }
+.resume .pick-actions { margin-top: 10px; }
+.badge {
+  display: inline-block; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 6px; background: var(--accent-fill); color: var(--accent-ink); vertical-align: 2px; margin-right: 6px;
+}
+.rounds { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
+.round { display: flex; gap: 2px; padding: 2px; border-radius: 15px; background: var(--surface-2); }
+.round .chip { width: 22px; height: 22px; font-size: 0.65rem; }
+.round .chip.off { opacity: 0.28; }
+.filters .span2 { grid-column: span 2; }
+
 /* Tab bar */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
@@ -228,4 +268,7 @@ dialog p { margin: 0 0 16px; font-size: 1.05rem; }
 
 @media (prefers-reduced-motion: reduce) {
   .chip.pop, .bar > div { animation: none; transition: none; }
+  .pick-coin.deal .pc-face { animation: fadein 0.2s ease-out; }
+  .pick-coin:active { transform: none; }
 }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }

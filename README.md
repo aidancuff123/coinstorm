@@ -5,7 +5,7 @@ per session, computes exact statistics, logs every session, and tracks lifetime 
 
 Live at **https://coinstorm.duckdns.org**. Source: https://github.com/aidancuff123/coinstorm (private). The VM pushes
 with a repo-only deploy key, `~/.ssh/coinstorm_deploy`. Runs on the GCP VM `coinstorm-dev` (project
-`coinstorm-sim-2026`, static IP 34.138.75.129).
+`coinstorm-sim-2026`, e2-micro, static IP 34.138.75.129).
 
 ## How it works
 
@@ -14,7 +14,7 @@ with a repo-only deploy key, `~/.ssh/coinstorm_deploy`. Runs on the GCP VM `coin
 - **Exact stats in bounded memory:** tosses are generated and analysed in 128K-flip chunks
   (`app/sim.py`). The run in progress at a chunk boundary is carried into the next chunk, so streaks,
   runs and histograms are exact. The tests check this against a naive one-toss-at-a-time implementation.
-- **Benchmark (max run, 2,147,483,647 tosses):** 10.1 s and 36 MB peak RSS standalone; 14.0 s and
+- **Benchmark (max run, 2,147,483,647 tosses), measured on the original e2-standard-4:** 10.1 s and 36 MB peak RSS standalone; 14.0 s and
   70 MB peak for the whole server when run through the API. 128K chunks were both fastest and smallest:
   64M chunks used 747 MB and ran 2.8× slower. Re-run with `.venv/bin/python scripts/bench.py max`
   (other modes: `rng`, `chunks`).
@@ -32,6 +32,25 @@ scripts/    test.sh, bench.py, backup.py, make_icons.py
 deploy/     coinstorm.service, Caddyfile (copies of what is installed in /etc)
 ```
 
+## Pick mode
+
+Each round flips two coins and you tap the one to keep. A session is 1–10,000 rounds, and you can
+finish early. When the session starts, `POST /api/picks` flips all the pairs (os.urandom) and stores
+them as a server-side draft. Finishing sends only the picks (0 = coin A, 1 = coin B), and the server
+rebuilds the kept sequence from its own stored pairs, so a client can't invent coins.
+
+Your progress is saved in localStorage, so closing the app mid-session offers **Resume**. Unfinished
+drafts expire after 7 days.
+
+A pick session gets the usual analysis of the kept coins, plus:
+- how many rounds were a real choice (the coins differed)
+- how often you kept heads when they did, with a z-test for a heads preference
+- coin A vs. coin B
+- a fairness check on every coin shown
+
+Your choices bias the kept results, so pick sessions are excluded from lifetime fairness stats
+(totals, charts, records) and get their own summary card on the Stats tab.
+
 ## API
 
 | Method | Path | Notes |
@@ -39,9 +58,12 @@ deploy/     coinstorm.service, Caddyfile (copies of what is installed in /etc)
 | POST | `/api/sessions` | `{"n": int, "label"?: str}`. `201` with full result if n ≤ 1M, otherwise `202 {"job_id"}`. `409` if a job is running. `422` unless n is a JSON integer with 1 ≤ n ≤ 2,147,483,647. |
 | GET | `/api/jobs/{id}` | `status`, `done`, `n`, `eta_s`; adds `session` when done |
 | GET | `/api/jobs` | the running job, if any |
-| GET | `/api/sessions` | `limit`, `offset`, `sort` (`date_desc`/`date_asc`/`size_desc`/`size_asc`), `min_n`, `max_n` |
+| GET | `/api/sessions` | `limit`, `offset`, `sort` (`date_desc`/`date_asc`/`size_desc`/`size_asc`), `min_n`, `max_n`, `mode` (`simulate`/`pick`) |
 | GET / DELETE | `/api/sessions/{id}` | |
-| GET | `/api/stats/lifetime` | totals, cumulative series, z-scores, longest streak, records |
+| GET | `/api/stats/lifetime` | simulated sessions: totals, cumulative series, z-scores, longest streak, records; plus a `pick` summary |
+| POST | `/api/picks` | `{"n": 1–10000, "label"?: str}` → `201 {"draft_id", "n", "label", "pairs"}`; `pairs` is "AB" per round as H/T |
+| GET / DELETE | `/api/picks/{id}` | read or discard an unfinished pick session |
+| POST | `/api/picks/{id}/finish` | `{"picks": [0\|1, ...]}` (1 to n of them) → `201` full session with a `pick` object |
 
 Interactive docs: https://coinstorm.duckdns.org/api/docs
 
@@ -54,8 +76,8 @@ python3 -m venv .venv
 COINSTORM_DB=/tmp/dev.db .venv/bin/uvicorn --factory app.main:create_app --port 8011 --reload
 ```
 
-Run the tests with `scripts/test.sh`. It runs pytest in a 2 GB memory-capped scope. The VM has no swap,
-and an uncapped runaway test once OOM-killed the whole login session.
+Run the tests with `scripts/test.sh`. It runs pytest in a 512 MB memory-capped scope (override with
+`COINSTORM_TEST_MEM`), because an uncapped runaway test once OOM-killed the whole login session.
 
 ## Deploy
 

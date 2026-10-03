@@ -3,7 +3,17 @@
 const MAX = 2147483647;
 const ANIM_LIMIT = 20;    // animate the coin for this many tosses or fewer
 const CHIPS_LIMIT = 200;  // show the H/T strip for this many tosses or fewer
+const PICK_MAX = 10000;   // pick mode: rounds per session
+const STRIP_TAIL = 60;    // pick mode: kept chips shown while picking
 const $ = (id) => document.getElementById(id);
+
+// localStorage is a convenience only (remembered mode, unfinished pick session).
+function store(k, v) {
+  try { v == null ? localStorage.removeItem("coinstorm." + k) : localStorage.setItem("coinstorm." + k, JSON.stringify(v)); } catch { /* unavailable */ }
+}
+function recall(k) {
+  try { return JSON.parse(localStorage.getItem("coinstorm." + k)); } catch { return null; }
+}
 
 /* ---------- formatting ---------- */
 const intFmt = new Intl.NumberFormat("en-US");
@@ -50,7 +60,9 @@ async function api(method, path, body) {
   if (!res.ok && res.status !== 409) {
     let msg = data?.detail;
     if (Array.isArray(msg)) msg = msg.map((d) => d.msg).join("; ");
-    throw new Error(msg || `Request failed (${res.status})`);
+    const err = new Error(msg || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
   }
   return { status: res.status, data };
 }
@@ -176,9 +188,11 @@ function renderSession(container, s, prefix) {
   const devPP = s.deviation * 100;
   const pos = (start) => (start ? `from toss ${fmtInt(start)}` : "");
   const showChips = s.sequence && n <= CHIPS_LIMIT;
+  const isPick = s.mode === "pick";
+  const unit = isPick ? (n === 1 ? "round" : "rounds") : (n === 1 ? "toss" : "tosses");
   container.innerHTML = `
     <div class="card">
-      <div class="meta">${esc(s.label ? s.label + " · " : "")}${fmtDate(s.created_at)} · ${fmtInt(n)} toss${n === 1 ? "" : "es"} in ${fmtDuration(s.duration_ms)}</div>
+      <div class="meta">${isPick ? '<span class="badge">Pick</span>' : ""}${esc(s.label ? s.label + " · " : "")}${fmtDate(s.created_at)} · ${fmtInt(n)} ${unit} in ${fmtDuration(s.duration_ms)}</div>
       <div class="headline">
         <div class="side"><div class="label"><span class="dot" style="background:var(--heads)"></span>Heads</div>
           <div class="big num">${fmtInt(s.heads)}</div><div class="pct num">${fmtPct(hp, d)}</div></div>
@@ -186,10 +200,12 @@ function renderSession(container, s, prefix) {
           <div class="big num">${fmtInt(s.tails)}</div><div class="pct num">${fmtPct(tp, d)}</div></div>
       </div>
       ${showChips ? `<div class="chips" aria-label="Toss sequence">${chipsHtml(s.sequence, s)}</div>
-        <div class="chart-note">Ringed chips mark the longest heads and tails streaks.</div>` : ""}
+        <div class="chart-note">${isPick ? "The coins you kept. " : ""}Ringed chips mark the longest heads and tails streaks.</div>` : ""}
     </div>
+    ${isPick && s.pick ? choicesHtml(s) : ""}
     <div class="card">
-      <h2>Fair coin?</h2>
+      <h2>${isPick ? "Kept coins vs. 50%" : "Fair coin?"}</h2>
+      ${isPick ? `<div class="chart-note" style="margin:-4px 0 10px">You chose these coins, so this tests your picks, not the coin.</div>` : ""}
       ${verdictHtml(s.verdict, s.p_value)}
       <dl class="kv">
         <dt>Deviation from 50%</dt><dd>${signed(Math.abs(devPP).toFixed(Math.max(d, 2)), devPP)} pts
@@ -225,6 +241,36 @@ function renderSession(container, s, prefix) {
   streakChart(`${prefix}-streaks`, s);
 }
 
+function choicesHtml(s) {
+  const p = s.pick, n = s.n_tosses;
+  const chip = (c, off) => `<span class="chip ${c === "H" ? "h" : "t"}${off ? " off" : ""}">${c}</span>`;
+  const rounds = n <= CHIPS_LIMIT ? `<div class="rounds" aria-label="Rounds">${[...p.picks].map((k, i) => {
+      const keepB = k === "B";
+      return `<span class="round" title="Round ${i + 1}">${chip(p.pairs[2 * i], keepB)}${chip(p.pairs[2 * i + 1], !keepB)}</span>`;
+    }).join("")}</div>
+    <div class="chart-note">One pair per round (coin A, coin B). The faded coin is the one you passed over.</div>` : "";
+  return `
+    <div class="card">
+      <h2>Your choices</h2>
+      ${verdictHtml(p.choice_verdict, p.choice_p)}
+      <dl class="kv">
+        <dt>Real choices</dt><dd>${fmtInt(p.choices)} of ${fmtInt(n)}<span class="sub">rounds where the coins differed</span></dd>
+        <dt>You kept heads</dt><dd>${p.choices ? `${fmtInt(p.chose_heads)} (${fmtPct(p.chose_heads_pct)})` : "—"}<span class="sub">when you had a choice</span></dd>
+        <dt>Heads preference test</dt><dd>z ${fmtZ(p.choice_z)}<span class="sub">p = ${fmtP(p.choice_p)}</span></dd>
+        <dt>Coin A / coin B</dt><dd>${fmtInt(n - p.chose_b)} / ${fmtInt(p.chose_b)}<span class="sub">${fmtPct(100 - p.chose_b_pct)} / ${fmtPct(p.chose_b_pct)}</span></dd>
+      </dl>
+      ${rounds}
+    </div>
+    <div class="card">
+      <h2>The coins themselves</h2>
+      ${verdictHtml(p.raw_verdict, p.raw_p)}
+      <dl class="kv">
+        <dt>Heads among all coins shown</dt><dd>${fmtInt(p.raw_heads)} of ${fmtInt(p.raw_total)}<span class="sub">${fmtPct(p.raw_heads_pct, pctDigits(p.raw_total))}</span></dd>
+        <dt>z-score</dt><dd>${fmtZ(p.raw_z)}<span class="sub">p = ${fmtP(p.raw_p)}</span></dd>
+      </dl>
+    </div>`;
+}
+
 /* ---------- toss view ---------- */
 const nInput = $("n-input"), tossBtn = $("toss-btn");
 let lastResult = null, polling = null;
@@ -249,16 +295,39 @@ document.querySelectorAll(".quick button").forEach((b) => b.addEventListener("cl
   syncQuick();
 }));
 
+let mode = "simulate";
+const MODE_HELP = {
+  simulate: "Toss coins and get exact statistics.",
+  pick: "Each round flips two coins and you choose which one to keep.",
+};
+function setMode(m) {
+  mode = m === "pick" ? "pick" : "simulate";
+  document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
+  $("mode-help").textContent = MODE_HELP[mode];
+  $("n-label").textContent = mode === "pick" ? "Number of rounds" : "Number of tosses";
+  $("n-help").textContent = mode === "pick" ? `1 to ${fmtInt(PICK_MAX)} · you can finish early` : `1 to ${fmtInt(MAX)}`;
+  document.querySelectorAll(".quick button").forEach((b) => { b.hidden = mode === "pick" && +b.dataset.n > PICK_MAX; });
+  if (mode === "pick" && parseN() > PICK_MAX) { nInput.value = ""; syncQuick(); }
+  setBusy(false);
+  showError("");
+  store("mode", mode);
+}
+document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
 function showError(msg) { $("toss-error").textContent = msg; $("toss-error").hidden = !msg; }
-function setBusy(busy) { tossBtn.disabled = busy; tossBtn.textContent = busy ? "Tossing…" : "Toss"; }
+function setBusy(busy) {
+  tossBtn.disabled = busy;
+  tossBtn.textContent = busy ? (mode === "pick" ? "Flipping…" : "Tossing…") : (mode === "pick" ? "Start picking" : "Toss");
+}
 
 $("toss-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const n = parseN();
-  if (!Number.isInteger(n) || n < 1 || n > MAX) { showError(`Enter a whole number from 1 to ${fmtInt(MAX)}.`); return; }
+  const n = parseN(), max = mode === "pick" ? PICK_MAX : MAX;
+  if (!Number.isInteger(n) || n < 1 || n > max) { showError(`Enter a whole number from 1 to ${fmtInt(max)}.`); return; }
   const label = $("label-input").value.trim() || undefined;
   nInput.blur(); $("label-input").blur();
   showError("");
+  if (mode === "pick") { await startPickSession(n, label); return; }
   setBusy(true);
   $("toss-result").innerHTML = "";
   try {
@@ -354,6 +423,139 @@ function trackJob(jid) {
   polling = setInterval(tick, 500);
 }
 
+/* ---------- pick mode ---------- */
+let pk = null;          // { draft, picks, heads, busy, finishing }
+let resumable = null;   // unfinished draft found on load
+
+async function startPickSession(n, label) {
+  setBusy(true);
+  try {
+    const { data } = await api("POST", "/api/picks", { n, label });
+    $("label-input").value = "";
+    beginPicking(data, []);
+  } catch (err) {
+    showError(err.message);
+  }
+  setBusy(false);
+}
+
+function beginPicking(draft, picks) {
+  const heads = picks.reduce((h, k, i) => h + (draft.pairs[2 * i + k] === "H"), 0);
+  pk = { draft, picks, heads, busy: false, finishing: false };
+  store("pick", { id: draft.draft_id, picks });
+  $("pick-resume").hidden = true;
+  $("toss-form").hidden = true;
+  $("toss-result").innerHTML = "";
+  $("pick").hidden = false;
+  pickMessage("Tap the coin you want to keep.");
+  $("pick-strip").innerHTML = chipsHtml(picks.slice(-STRIP_TAIL).map((k, j) => {
+    const i = picks.length - Math.min(picks.length, STRIP_TAIL) + j;
+    return draft.pairs[2 * i + k];
+  }).join(""));
+  nextRound();
+  reveal($("pick"), "start");
+}
+
+function pickMessage(text, isError = false) {
+  const el = document.querySelector(".pick-hint");
+  el.textContent = text;
+  el.classList.toggle("error", isError);
+}
+
+function nextRound() {
+  const i = pk.picks.length, n = pk.draft.n;
+  $("pick-round").textContent = `Round ${fmtInt(Math.min(i + 1, n))} of ${fmtInt(n)}`;
+  $("pick-tally").textContent = `Kept H ${fmtInt(pk.heads)} · T ${fmtInt(i - pk.heads)}`;
+  $("pick-bar").style.width = (100 * i) / n + "%";
+  $("pick-finish").disabled = i === 0;
+  if (i >= n) { finishPicking(); return; }
+  document.querySelectorAll(".pick-coin").forEach((b, k) => {
+    const c = pk.draft.pairs[2 * i + k];
+    b.classList.remove("chosen", "passed", "deal", "h", "t");
+    void b.offsetWidth; // restart the deal animation
+    b.classList.add("deal", c === "H" ? "h" : "t");
+    b.querySelector(".pc-face").textContent = c;
+    b.setAttribute("aria-label", `Keep coin ${"AB"[k]}: ${c === "H" ? "heads" : "tails"}`);
+    b.disabled = false;
+  });
+}
+
+async function choose(k) {
+  if (!pk || pk.busy || pk.finishing) return;
+  pk.busy = true;
+  const i = pk.picks.length, c = pk.draft.pairs[2 * i + k];
+  document.querySelectorAll(".pick-coin").forEach((b, j) => { b.classList.add(j === k ? "chosen" : "passed"); b.disabled = true; });
+  pk.picks.push(k);
+  if (c === "H") pk.heads++;
+  store("pick", { id: pk.draft.draft_id, picks: pk.picks });
+  const strip = $("pick-strip");
+  strip.insertAdjacentHTML("beforeend", chipsHtml(c, null, true));
+  while (strip.children.length > STRIP_TAIL) strip.firstElementChild.remove();
+  await sleep(220);
+  pk.busy = false;
+  nextRound();
+}
+document.querySelectorAll(".pick-coin").forEach((b) => b.addEventListener("click", () => choose(+b.dataset.pick)));
+
+async function finishPicking() {
+  if (!pk || !pk.picks.length || pk.finishing) return;
+  pk.finishing = true;
+  $("pick-finish").disabled = true;
+  pickMessage("Saving…");
+  try {
+    const { data } = await api("POST", `/api/picks/${pk.draft.draft_id}/finish`, { picks: pk.picks });
+    endPicking();
+    showResult(data);
+  } catch (err) {
+    if (err.status === 404) { endPicking(); showError(err.message); return; }
+    pk.finishing = false;
+    $("pick-finish").disabled = false;
+    pickMessage(`Couldn’t save: ${err.message}. Your picks are kept; try again.`, true);
+  }
+}
+$("pick-finish").addEventListener("click", finishPicking);
+
+function endPicking() {
+  pk = null;
+  store("pick", null);
+  $("pick").hidden = true;
+  $("toss-form").hidden = false;
+}
+
+async function discardDraft(id, count) {
+  const msg = count ? `Discard this pick session? Your ${fmtInt(count)} pick${count === 1 ? "" : "s"} won’t be saved.` : "Discard this pick session?";
+  if (!(await confirmDialog(msg, "Discard"))) return false;
+  api("DELETE", `/api/picks/${id}`).catch(() => { /* already gone */ });
+  store("pick", null);
+  return true;
+}
+$("pick-discard").addEventListener("click", async () => {
+  if (pk && (await discardDraft(pk.draft.draft_id, pk.picks.length))) endPicking();
+});
+
+async function checkPickResume() {
+  const saved = recall("pick");
+  if (!saved?.id || pk) return;
+  try {
+    const { data } = await api("GET", `/api/picks/${encodeURIComponent(saved.id)}`);
+    const picks = (Array.isArray(saved.picks) ? saved.picks : []).filter((k) => k === 0 || k === 1).slice(0, data.n);
+    resumable = { draft: data, picks };
+    $("pick-resume-text").textContent = `${data.label ? `“${data.label}” · ` : ""}${fmtInt(picks.length)} of ${fmtInt(data.n)} rounds picked.`;
+    $("pick-resume").hidden = false;
+  } catch (err) {
+    if (err.status === 404) store("pick", null);
+  }
+}
+$("pick-resume-go").addEventListener("click", () => {
+  if (resumable) { setMode("pick"); beginPicking(resumable.draft, resumable.picks); resumable = null; }
+});
+$("pick-resume-discard").addEventListener("click", async () => {
+  if (resumable && (await discardDraft(resumable.draft.draft_id, resumable.picks.length))) {
+    resumable = null;
+    $("pick-resume").hidden = true;
+  }
+});
+
 /* ---------- log view ---------- */
 const PAGE = 30;
 let logItems = [], logTotal = 0;
@@ -364,6 +566,7 @@ async function loadLog(reset = true) {
   const q = new URLSearchParams({ limit: PAGE, offset: logItems.length, sort: $("log-sort").value });
   if (lo) q.set("min_n", lo);
   if (hi) q.set("max_n", hi);
+  if ($("log-mode").value) q.set("mode", $("log-mode").value);
   try {
     const { data } = await api("GET", `/api/sessions?${q}`);
     logItems = logItems.concat(data.items);
@@ -377,7 +580,7 @@ function renderLog() {
   $("log-list").innerHTML = logItems.map((r) => `
     <li data-id="${r.id}">
       <a href="#session/${r.id}">
-        <div class="row1"><span class="lbl">${esc(r.label || fmtDate(r.created_at))}</span><span class="num">${fmtInt(r.n_tosses)}</span></div>
+        <div class="row1"><span class="lbl">${r.mode === "pick" ? '<span class="badge">Pick</span>' : ""}${esc(r.label || fmtDate(r.created_at))}</span><span class="num">${fmtInt(r.n_tosses)}</span></div>
         <div class="row2"><span>${r.label ? fmtDate(r.created_at) : "&nbsp;"}</span>
           <span class="num">${fmtPct(r.heads_pct, pctDigits(r.n_tosses))} H · streak ${fmtInt(r.longest_streak)}</span></div>
       </a>
@@ -385,11 +588,13 @@ function renderLog() {
     </li>`).join("");
   $("log-count").textContent = logTotal ? `${fmtInt(logTotal)} session${logTotal === 1 ? "" : "s"}` : "";
   $("log-more").hidden = logItems.length >= logTotal;
-  $("log-empty").hidden = logTotal > 0 || $("log-size").value !== "";
-  if (!logTotal && $("log-size").value) $("log-count").textContent = "No sessions in this size range.";
+  const filtered = $("log-size").value || $("log-mode").value;
+  $("log-empty").hidden = logTotal > 0 || !!filtered;
+  if (!logTotal && filtered) $("log-count").textContent = "No sessions match these filters.";
 }
 $("log-sort").addEventListener("change", () => loadLog());
 $("log-size").addEventListener("change", () => loadLog());
+$("log-mode").addEventListener("change", () => loadLog());
 $("log-more").addEventListener("click", () => loadLog(false));
 $("log-list").addEventListener("click", async (e) => {
   const id = e.target.closest("[data-del]")?.dataset.del;
@@ -398,9 +603,10 @@ $("log-list").addEventListener("click", async (e) => {
   if (await deleteSession(+id, r)) { logItems = logItems.filter((x) => x !== r); logTotal--; renderLog(); }
 });
 
-function confirmDialog(text) {
+function confirmDialog(text, okLabel = "Delete") {
   const dlg = $("confirm");
   $("confirm-text").textContent = text;
+  dlg.querySelector('button[value="ok"]').textContent = okLabel;
   return new Promise((resolve) => {
     dlg.addEventListener("close", () => resolve(dlg.returnValue === "ok"), { once: true });
     dlg.returnValue = "";
@@ -408,7 +614,8 @@ function confirmDialog(text) {
   });
 }
 async function deleteSession(id, r) {
-  const what = r ? `${r.label ? `“${r.label}” ` : ""}(${fmtInt(r.n_tosses)} tosses, ${fmtDate(r.created_at)})` : "this session";
+  const unit = r?.mode === "pick" ? "rounds" : "tosses";
+  const what = r ? `${r.label ? `“${r.label}” ` : ""}(${fmtInt(r.n_tosses)} ${unit}, ${fmtDate(r.created_at)})` : "this session";
   if (!(await confirmDialog(`Delete ${what}? This can’t be undone.`))) return false;
   try { await api("DELETE", `/api/sessions/${id}`); }
   catch (err) { alert(err.message); return false; }
@@ -456,11 +663,34 @@ function recordLink(r, key, value) {
     <div class="rv">${value}</div><div class="rk">${esc(r.label ? r.label + " · " : "")}${fmtDate(r.created_at)}</div></a></li>`;
 }
 
+function pickStatsHtml(P) {
+  return `<div class="card">
+    <h2><span class="badge">Pick</span>Pick mode</h2>
+    ${verdictHtml(P.choice_verdict, P.choice_p)}
+    <dl class="kv">
+      <dt>Sessions</dt><dd>${fmtInt(P.sessions)}</dd>
+      <dt>Rounds played</dt><dd>${fmtInt(P.rounds)}</dd>
+      <dt>Real choices</dt><dd>${fmtInt(P.choices)}<span class="sub">coins differed</span></dd>
+      <dt>You kept heads</dt><dd>${P.choices ? fmtPct(P.chose_heads_pct) : "—"}<span class="sub">when you had a choice · z ${fmtZ(P.choice_z)}, p = ${fmtP(P.choice_p)}</span></dd>
+      <dt>Kept heads overall</dt><dd>${fmtPct(P.kept_heads_pct)}</dd>
+      <dt>Coin A / coin B</dt><dd>${fmtPct(100 - P.chose_b_pct)} / ${fmtPct(P.chose_b_pct)}</dd>
+      <dt>All coins shown</dt><dd>${fmtPct(P.raw_heads_pct, pctDigits(P.raw_total))} heads<span class="sub">${fmtInt(P.raw_total)} coins · p = ${fmtP(P.raw_p)}</span></dd>
+    </dl>
+  </div>`;
+}
+
 function renderStats(L) {
   const body = $("stats-body");
-  if (!L.sessions) { body.innerHTML = `<div class="empty">No sessions yet. Lifetime stats appear after your first toss.</div>`; return; }
+  const pickCard = L.pick ? pickStatsHtml(L.pick) : "";
+  if (!L.sessions) {
+    body.innerHTML = L.pick
+      ? `<div class="empty">No simulated sessions yet.</div>${pickCard}`
+      : `<div class="empty">No sessions yet. Lifetime stats appear after your first toss.</div>`;
+    return;
+  }
   const d = pctDigits(L.tosses), R = L.records, ls = L.longest_streak;
   body.innerHTML = `
+    ${L.pick ? `<div class="hint" style="margin-top:12px">Totals, charts and records cover simulated sessions. Pick sessions are summarised at the bottom, because your choices bias them.</div>` : ""}
     <div class="tiles" style="margin-top:12px">
       <div class="tile"><div class="k">Sessions</div><div class="v">${fmtInt(L.sessions)}</div></div>
       <div class="tile"><div class="k">Tosses</div><div class="v">${fmtInt(L.tosses)}</div></div>
@@ -492,7 +722,8 @@ function renderStats(L) {
       ${R.most_extreme_pct ? recordLink(R.most_extreme_pct, "Most extreme heads % (100+ tosses)", `${fmtPct(R.most_extreme_pct.heads_pct, 2)} heads in ${fmtInt(R.most_extreme_pct.n_tosses)}`) : ""}
       ${recordLink(R.longest_heads, "Longest heads streak", `${fmtInt(R.longest_heads.length)}`)}
       ${recordLink(R.longest_tails, "Longest tails streak", `${fmtInt(R.longest_tails.length)}`)}
-    </ul></div>`;
+    </ul></div>
+    ${pickCard}`;
   cumulativeChart(L);
   zChart(L);
 }
@@ -584,5 +815,7 @@ async function resumeJob() {
 }
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+setMode(recall("mode") || "simulate");
 route();
 resumeJob();
+checkPickResume();

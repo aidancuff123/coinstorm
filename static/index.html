@@ -28,8 +28,21 @@
 <main>
   <!-- TOSS -->
   <section id="view-toss" class="view">
+    <div id="pick-resume" class="card resume" hidden>
+      <div><strong>Unfinished pick session</strong><div id="pick-resume-text" class="hint"></div></div>
+      <div class="pick-actions">
+        <button type="button" id="pick-resume-go" class="secondary">Resume</button>
+        <button type="button" id="pick-resume-discard" class="danger">Discard</button>
+      </div>
+    </div>
+
     <form id="toss-form" class="card" autocomplete="off" novalidate>
-      <label for="n-input" class="field-label">Number of tosses</label>
+      <div class="seg" role="radiogroup" aria-label="Mode">
+        <button type="button" role="radio" data-mode="simulate" aria-checked="true">Simulate</button>
+        <button type="button" role="radio" data-mode="pick" aria-checked="false">Pick</button>
+      </div>
+      <div id="mode-help" class="hint mode-help"></div>
+      <label for="n-input" id="n-label" class="field-label">Number of tosses</label>
       <input id="n-input" class="big-input" inputmode="numeric" enterkeyhint="go"
              placeholder="1,000" aria-describedby="n-help">
       <div id="n-help" class="hint">1 to 2,147,483,647</div>
@@ -46,6 +59,21 @@
       <button id="toss-btn" class="primary" type="submit">Toss</button>
       <div id="toss-error" class="error" role="alert" hidden></div>
     </form>
+
+    <div id="pick" class="card" hidden>
+      <div class="job-head"><strong id="pick-round" class="num"></strong><span id="pick-tally" class="num"></span></div>
+      <div class="bar"><div id="pick-bar"></div></div>
+      <div class="pair" role="group" aria-label="Choose a coin to keep">
+        <button type="button" class="pick-coin" data-pick="0"><span class="pc-face"></span><span class="pc-name">Coin A</span></button>
+        <button type="button" class="pick-coin" data-pick="1"><span class="pc-face"></span><span class="pc-name">Coin B</span></button>
+      </div>
+      <div class="hint pick-hint">Tap the coin you want to keep.</div>
+      <div id="pick-strip" class="chips" aria-label="Kept so far"></div>
+      <div class="pick-actions">
+        <button type="button" id="pick-finish" class="secondary">Finish &amp; save</button>
+        <button type="button" id="pick-discard" class="danger">Discard</button>
+      </div>
+    </div>
 
     <div id="anim" class="card anim" hidden>
       <div class="coin-stage"><div id="coin" class="coin"><div class="face h">H</div><div class="face t">T</div></div></div>
@@ -75,6 +103,11 @@
         <option value="0-1000">≤ 1K</option>
         <option value="1001-1000000">1K – 1M</option>
         <option value="1000001-">&gt; 1M</option>
+      </select>
+      <select id="log-mode" aria-label="Filter by mode" class="span2">
+        <option value="">All modes</option>
+        <option value="simulate">Simulated</option>
+        <option value="pick">Pick mode</option>
       </select>
     </div>
     <div id="log-count" class="hint"></div>

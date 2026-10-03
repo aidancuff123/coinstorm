@@ -1,5 +1,5 @@
 // App-shell service worker. Bump VERSION whenever a shell file changes.
-const VERSION = "coinstorm-v3";
+const VERSION = "coinstorm-v4";
 const SHELL = [
   "/", "/app.css", "/app.js", "/vendor/chart.umd.min.js", "/manifest.webmanifest",
   "/icons/apple-touch-icon-180.png", "/icons/icon-192.png", "/icons/icon-512.png",
