@@ -1,0 +1,28 @@
+# /etc/caddy/Caddyfile — Caddy obtains and renews the HTTPS certificate automatically
+# and redirects HTTP to HTTPS.
+coinstorm.duckdns.org {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	# App shell revalidates on every load (cheap ETag check); the service worker
+	# handles offline. Vendored libraries and icons rarely change.
+	@static_long path /vendor/* /icons/*
+	header @static_long Cache-Control "public, max-age=604800"
+	@static_short not path /vendor/* /icons/* /api/*
+	header @static_short Cache-Control "no-cache"
+
+	reverse_proxy 127.0.0.1:8010
+
+	log {
+		output file /var/log/caddy/coinstorm.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
