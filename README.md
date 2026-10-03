@@ -3,7 +3,8 @@
 An iPhone-first PWA coin toss simulator. It tosses up to 2,147,483,647 cryptographically random coins
 per session, computes exact statistics, logs every session, and tracks lifetime analytics.
 
-Live at **https://coinstorm.duckdns.org**. Runs on the GCP VM `coinstorm-dev` (project
+Live at **https://coinstorm.duckdns.org**. Source: https://github.com/aidancuff123/coinstorm (private). The VM pushes
+with a repo-only deploy key, `~/.ssh/coinstorm_deploy`. Runs on the GCP VM `coinstorm-dev` (project
 `coinstorm-sim-2026`, static IP 34.138.75.129).
 
 ## How it works
