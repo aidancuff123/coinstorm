@@ -165,3 +165,11 @@ def test_sample_points():
     assert sim.sample_points(5).tolist() == [1, 2, 3, 4, 5]
     pts = sim.sample_points(sim.MAX_TOSSES)
     assert len(pts) == 1000 and pts[-1] == sim.MAX_TOSSES and np.all(np.diff(pts) > 0)
+
+
+def test_unpack_sequence_rejects_mismatched_length():
+    blob = sim.simulate(10)["sequence"]
+    with pytest.raises(ValueError):
+        sim.unpack_sequence(blob, sim.MAX_TOSSES)
+    with pytest.raises(ValueError):
+        sim.unpack_sequence(blob, 100)

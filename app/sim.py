@@ -160,6 +160,8 @@ def _trim(h):
 
 def unpack_sequence(blob, n):
     """Inverse of the stored packed sequence: list of 0/1, 1 = heads."""
+    if n > SEQUENCE_LIMIT or len(blob) != (n + 7) // 8:
+        raise ValueError(f"stored sequence ({len(blob)} bytes) does not match n={n}")
     return np.unpackbits(np.frombuffer(blob, np.uint8), count=n).tolist()
 
 
