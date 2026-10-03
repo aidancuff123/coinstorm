@@ -265,7 +265,7 @@ $("toss-form").addEventListener("submit", async (e) => {
     const { status, data } = await api("POST", "/api/sessions", { n, label });
     if (status === 409) { showError("A big run is already in progress — showing its progress."); trackJob(data.job_id); return; }
     if (status === 202) { trackJob(data.job_id); return; }
-    if (n <= ANIM_LIMIT && !matchMedia("(prefers-reduced-motion: reduce)").matches) await animate(data);
+    if (n <= ANIM_LIMIT) await animate(data);
     showResult(data);
   } catch (err) {
     showError(err.message);
@@ -280,13 +280,35 @@ function showResult(s) {
   setBusy(false);
   renderSession($("toss-result"), s, "toss");
   $("label-input").value = "";
+  reveal($("toss-result"), "start");
+}
+
+// The form fills most of a phone screen, so bring what's happening below it into view.
+function reveal(el, block = "center") {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block });
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function animate(s) {
   const seq = s.sequence, coin = $("coin"), strip = $("anim-strip");
+  // Reduce Motion: no spin, but still reveal tosses one at a time.
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   $("anim").hidden = false;
   strip.innerHTML = "";
+  coin.style.transition = "none";
+  coin.style.transform = "rotateY(0deg)";
+  coin.parentElement.hidden = reduce;
+  reveal($("anim"));
+  await sleep(reduce ? 100 : 350);  // let the scroll settle before the first flip
+  if (reduce) {
+    for (const c of seq) {
+      strip.insertAdjacentHTML("beforeend", chipsHtml(c));
+      await sleep(Math.max(120, 1500 / seq.length));
+    }
+    await sleep(300);
+    return;
+  }
   const per = Math.max(260, Math.min(700, 4000 / seq.length));
   let angle = 0;
   for (const c of seq) {
@@ -307,6 +329,7 @@ function trackJob(jid) {
   $("job").hidden = false;
   $("anim").hidden = true;
   setBusy(true);
+  reveal($("job"));
   const tick = async () => {
     let j;
     try { ({ data: j } = await api("GET", `/api/jobs/${jid}`)); }
