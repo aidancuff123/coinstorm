@@ -292,21 +292,28 @@ function reveal(el, block = "center") {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function animate(s) {
   const seq = s.sequence, coin = $("coin"), strip = $("anim-strip");
-  // Reduce Motion: no spin, but still reveal tosses one at a time.
+  // Reduce Motion: no spin. Each toss dims the coin and fades in the face it landed on.
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   $("anim").hidden = false;
   strip.innerHTML = "";
   coin.style.transition = "none";
   coin.style.transform = "rotateY(0deg)";
-  coin.parentElement.hidden = reduce;
+  coin.classList.toggle("flat", reduce);
+  coin.classList.remove("tails", "dim");
   reveal($("anim"));
-  await sleep(reduce ? 100 : 350);  // let the scroll settle before the first flip
+  await sleep(350);  // let the scroll settle before the first toss
   if (reduce) {
+    const per = Math.max(300, Math.min(650, 4000 / seq.length));
     for (const c of seq) {
+      coin.classList.add("dim");
+      await sleep(per * 0.35);
+      coin.classList.toggle("tails", c === "T");
+      coin.classList.remove("dim");
+      await sleep(per * 0.3);
       strip.insertAdjacentHTML("beforeend", chipsHtml(c));
-      await sleep(Math.max(120, 1500 / seq.length));
+      await sleep(per * 0.35);
     }
-    await sleep(300);
+    await sleep(400);
     return;
   }
   const per = Math.max(260, Math.min(700, 4000 / seq.length));

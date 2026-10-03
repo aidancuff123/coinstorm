@@ -120,6 +120,13 @@ button, input, select { font: inherit; color: inherit; }
   color: #14171f;
 }
 .coin .face.t { transform: rotateY(180deg); }
+/* Reduce Motion variant: no rotation, faces cross-fade and the coin dims between tosses. */
+.coin.flat { transition: opacity 0.15s ease; }
+.coin.flat .face { transition: opacity 0.15s ease; }
+.coin.flat .face.t { transform: none; opacity: 0; }
+.coin.flat.tails .face.t { opacity: 1; }
+.coin.flat.tails .face.h { opacity: 0; }
+.coin.flat.dim { opacity: 0.25; }
 
 /* H/T chips */
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; justify-content: flex-start; }
