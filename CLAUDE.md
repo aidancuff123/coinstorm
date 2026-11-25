@@ -1,31 +1,28 @@
 # Coin Toss Simulator — Project Spec
 
-iPhone-first installable PWA that simulates coin tosses, analyzes results, logs every session, and tracks analytics across sessions over time. Hosted standalone on this VM (`coinstorm-dev`, GCP project coinstorm-sim-2026, public IP 34.138.75.129).
+iPhone-first installable PWA that simulates coin tosses, analyzes results, logs every session, and tracks analytics across sessions over time. Hosted as a static site on GitHub Pages: https://aidancuff123.github.io/coinstorm/. No server; everything runs in the browser.
 
 ## Ground rules
-- This VM is dedicated to coinstorm (4 vCPU, 15 GiB RAM, no swap, Ubuntu 24.04). Poopmap lives elsewhere and is out of scope.
-- Caddy is not installed yet; it will be installed here (with approval) to serve the app.
-- Ask for my approval before: editing the Caddyfile, reloading Caddy, creating/enabling systemd units, or installing system packages. Run `caddy validate` before any reload.
-- Minimal dependencies (numpy is fine). No frontend framework or build step: vanilla HTML/CSS/JS.
-- Write pytest tests for the simulation and stats modules and run them before calling a feature done.
-- Use git; commit at each working milestone.
+- Static files only, in `static/`. No backend, no build step, no frontend framework: vanilla HTML/CSS/JS.
+- Minimal dependencies. Chart.js stays vendored in static/vendor/ (no runtime CDN).
+- All paths relative, so the app works under /coinstorm/. Bump `VERSION` in static/sw.js when a shell file changes.
+- Write tests (node:test, `scripts/test.sh`) for the engine and run them before calling a feature done.
+- Use git; commit at each working milestone. Pushing to main deploys.
 
 ## Stack
-- FastAPI + uvicorn in a project venv
-- SQLite (WAL mode), single file in the project dir
-- Chart.js vendored into static/vendor/ (no runtime CDN)
-- Caddy (to be installed on this VM) with a coinstorm site block (automatic HTTPS)
-- systemd unit with restart on failure
-- DuckDNS subdomain: coinstorm.duckdns.org → 34.138.75.129.
+- static/engine.js: simulation, statistics, pick mode, lifetime analytics (pure functions; also loaded by Node tests)
+- static/worker.js: runs simulations in a Web Worker with crypto.getRandomValues
+- static/store.js: IndexedDB storage (stores `sessions` and `details`), pick drafts in localStorage, export/import
+- GitHub Actions workflow tests and publishes static/ to GitHub Pages
 
 ## Features
 
 1. Run a session
 - Input: number of tosses, 1 to 2,147,483,647 (max signed 32-bit int), plus an optional label
-- Every toss is simulated individually with a cryptographic RNG (`secrets` / `os.urandom`, or numpy PCG64 seeded from `secrets` if urandom is a bottleneck; benchmark and tell me which you chose). No statistical shortcuts: all stats are exact.
+- Every toss is simulated individually with a cryptographic RNG (`crypto.getRandomValues`). No statistical shortcuts: all stats are exact.
 - ≤20 tosses: short coin-flip animation revealing results one by one
-- Large runs: process in chunks (~64M flips each) with numpy, carrying streak and run state across chunk boundaries. Peak memory must stay under ~200 MB; this VM may be small.
-- Runs above ~1,000,000 tosses execute as a background job: POST returns a job id, the frontend polls a progress endpoint (or uses SSE) and shows a progress bar with flips done / total and an ETA. One job at a time; reject or queue a second.
+- Large runs: process in chunks, carrying streak and run state across chunk boundaries. Peak memory must stay small (phones).
+- All runs execute in a Web Worker. Runs above 1,000,000 tosses show a progress bar with flips done / total and an ETA. One run at a time.
 
 2. Session analytics
 - Heads/tails counts and %, deviation from 50% (absolute and in σ)
@@ -46,20 +43,11 @@ iPhone-first installable PWA that simulates coin tosses, analyzes results, logs 
 - Distribution of per-session z-scores vs. the standard normal curve
 - Records: biggest session, most lopsided session, etc.
 
-## Data model (suggested)
-- sessions: id, created_at, label, n_tosses, heads, tails, longest_heads, longest_tails, streak start positions, runs, z_score, p_value, duration_ms
-- session_series: downsampled running proportion (JSON), streak histograms (JSON)
-- session_sequence: packed bit blob, only stored when n_tosses ≤ 10,000
+## Data model
+- IndexedDB `sessions`: id, created_at, label, n_tosses, heads, tails, longest_heads(+_start), longest_tails(+_start), runs, z_score, p_value, duration_ms, mode, pick summary
+- IndexedDB `details` (same id): series, hist_heads, hist_tails, sequence (H/T string, only when n_tosses ≤ 10,000), pick pairs/picks
 - Every session screen must redraw from stored data. Never re-simulate.
-
-## API (suggested)
-- POST /api/sessions {n, label?} → full result (small n) or job id (large n)
-- GET /api/jobs/{id} → progress, then result when done
-- GET /api/sessions?limit&offset&sort
-- GET /api/sessions/{id}
-- DELETE /api/sessions/{id}
-- GET /api/stats/lifetime
-- Validate server-side: integer, 1 ≤ n ≤ 2,147,483,647
+- Export/import as a single JSON file (Stats tab). scripts/export_db.py converts the old server's SQLite DB to that format.
 
 ## iPhone / PWA
 - manifest.webmanifest (display: standalone, theme color, icons). Generate a simple coin icon: 180px apple-touch-icon plus 192/512 PNGs.
@@ -70,15 +58,14 @@ iPhone-first installable PWA that simulates coin tosses, analyzes results, logs 
 - Service worker caching the app shell
 
 ## Access
-Single user, no accounts, public by default. If light protection is possible without breaking standalone PWA mode (Caddy basic auth often misbehaves there), propose it and let me decide.
+Single user, no accounts. Data is per device (IndexedDB), so nothing is shared publicly.
 
 ## Later (not v1)
 Biased-coin mode, CSV export, coin-edge easter egg (~1 in 6,000), side-by-side session comparison.
 
 ## Done means
 - Tests pass, including: chunked streak/runs logic matches a naive implementation on random inputs (with streaks spanning chunk boundaries), and input validation at the limits
-- Benchmark of a max-size run on this VM, reporting time and peak memory
-- Live over HTTPS on the new subdomain
-- Installs to the iPhone home screen and runs standalone
-- systemd unit enabled and survives reboot
-- README.md covering run, deploy, and SQLite backup
+- Benchmark of a max-size run (`node scripts/bench.js`), reporting time and peak memory
+- Live on GitHub Pages over HTTPS
+- Installs to the iPhone home screen, runs standalone and offline
+- README.md covering run, deploy, and backup/export

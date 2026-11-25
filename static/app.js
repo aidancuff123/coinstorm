@@ -48,24 +48,11 @@ const fmtDay = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "sh
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-/* ---------- API ---------- */
-async function api(method, path, body) {
-  const res = await fetch(path, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let data = null;
-  if (res.status !== 204) data = await res.json().catch(() => null);
-  if (!res.ok && res.status !== 409) {
-    let msg = data?.detail;
-    if (Array.isArray(msg)) msg = msg.map((d) => d.msg).join("; ");
-    const err = new Error(msg || `Request failed (${res.status})`);
-    err.status = res.status;
-    throw err;
-  }
-  return { status: res.status, data };
-}
+/* ---------- storage ---------- */
+// Everything runs on this device: CoinStore (store.js) keeps sessions in IndexedDB
+// and runs simulations in a Web Worker.
+const db = window.CoinStore;
+const BIG_RUN = 1000000;  // show the progress card above this many tosses
 
 /* ---------- charts ---------- */
 const charts = new Map(); // canvas id -> Chart
@@ -273,7 +260,7 @@ function choicesHtml(s) {
 
 /* ---------- toss view ---------- */
 const nInput = $("n-input"), tossBtn = $("toss-btn");
-let lastResult = null, polling = null;
+let lastResult = null;
 
 function parseN() {
   const digits = nInput.value.replace(/\D/g, "");
@@ -330,13 +317,15 @@ $("toss-form").addEventListener("submit", async (e) => {
   if (mode === "pick") { await startPickSession(n, label); return; }
   setBusy(true);
   $("toss-result").innerHTML = "";
+  const job = n > BIG_RUN ? startJobCard() : null;
   try {
-    const { status, data } = await api("POST", "/api/sessions", { n, label });
-    if (status === 409) { showError("A big run is already in progress — showing its progress."); trackJob(data.job_id); return; }
-    if (status === 202) { trackJob(data.job_id); return; }
+    const data = await db.runSession(n, label, job?.update);
+    job?.stop();
     if (n <= ANIM_LIMIT) await animate(data);
     showResult(data);
   } catch (err) {
+    job?.stop();
+    $("job").hidden = true;
     showError(err.message);
     setBusy(false);
   }
@@ -400,27 +389,26 @@ async function animate(s) {
   await sleep(400);
 }
 
-function trackJob(jid) {
-  clearInterval(polling);
+// Progress card for big runs. The worker reports flips done; the ETA comes from the rate so far.
+function startJobCard() {
   $("job").hidden = false;
   $("anim").hidden = true;
-  setBusy(true);
   reveal($("job"));
-  const tick = async () => {
-    let j;
-    try { ({ data: j } = await api("GET", `/api/jobs/${jid}`)); }
-    catch (err) { clearInterval(polling); $("job").hidden = true; setBusy(false); showError(err.message); return; }
-    const pct = (100 * j.done) / j.n;
+  const t0 = performance.now();
+  let wake = null;
+  // Ask iOS/Android to keep the screen on: a backgrounded page pauses the run.
+  navigator.wakeLock?.request("screen").then((l) => { wake = l; }).catch(() => {});
+  const update = (done, n) => {
+    const pct = (100 * done) / n, elapsed = (performance.now() - t0) / 1000;
     $("job-bar").style.width = pct + "%";
     $("job-bar").parentElement.setAttribute("aria-valuenow", pct.toFixed(0));
     $("job-pct").textContent = pct.toFixed(pct < 10 ? 1 : 0) + "%";
-    $("job-count").textContent = `${fmtInt(j.done)} / ${fmtInt(j.n)} flips`;
-    $("job-eta").textContent = j.status === "running" ? fmtEta(j.eta_s) : "";
-    if (j.status === "done") { clearInterval(polling); showResult(j.session); }
-    if (j.status === "failed") { clearInterval(polling); $("job").hidden = true; setBusy(false); showError(`The run failed: ${j.error}`); }
+    $("job-count").textContent = `${fmtInt(done)} / ${fmtInt(n)} flips`;
+    $("job-eta").textContent = done < n ? fmtEta(done && elapsed > 0.5 ? (elapsed / done) * (n - done) : null) : "";
   };
-  tick();
-  polling = setInterval(tick, 500);
+  update(0, 1);
+  $("job-count").textContent = "";
+  return { update, stop: () => { wake?.release().catch(() => {}); } };
 }
 
 /* ---------- pick mode ---------- */
@@ -430,7 +418,7 @@ let resumable = null;   // unfinished draft found on load
 async function startPickSession(n, label) {
   setBusy(true);
   try {
-    const { data } = await api("POST", "/api/picks", { n, label });
+    const data = db.startPick(n, label);
     $("label-input").value = "";
     beginPicking(data, []);
   } catch (err) {
@@ -503,7 +491,7 @@ async function finishPicking() {
   $("pick-finish").disabled = true;
   pickMessage("Saving…");
   try {
-    const { data } = await api("POST", `/api/picks/${pk.draft.draft_id}/finish`, { picks: pk.picks });
+    const data = await db.finishPick(pk.draft.draft_id, pk.picks);
     endPicking();
     showResult(data);
   } catch (err) {
@@ -525,7 +513,7 @@ function endPicking() {
 async function discardDraft(id, count) {
   const msg = count ? `Discard this pick session? Your ${fmtInt(count)} pick${count === 1 ? "" : "s"} won’t be saved.` : "Discard this pick session?";
   if (!(await confirmDialog(msg, "Discard"))) return false;
-  api("DELETE", `/api/picks/${id}`).catch(() => { /* already gone */ });
+  db.discardDraft(id);
   store("pick", null);
   return true;
 }
@@ -537,7 +525,7 @@ async function checkPickResume() {
   const saved = recall("pick");
   if (!saved?.id || pk) return;
   try {
-    const { data } = await api("GET", `/api/picks/${encodeURIComponent(saved.id)}`);
+    const data = db.getDraft(saved.id);
     const picks = (Array.isArray(saved.picks) ? saved.picks : []).filter((k) => k === 0 || k === 1).slice(0, data.n);
     resumable = { draft: data, picks };
     $("pick-resume-text").textContent = `${data.label ? `“${data.label}” · ` : ""}${fmtInt(picks.length)} of ${fmtInt(data.n)} rounds picked.`;
@@ -563,12 +551,9 @@ let logItems = [], logTotal = 0;
 async function loadLog(reset = true) {
   if (reset) logItems = [];
   const [lo, hi] = ($("log-size").value || "-").split("-");
-  const q = new URLSearchParams({ limit: PAGE, offset: logItems.length, sort: $("log-sort").value });
-  if (lo) q.set("min_n", lo);
-  if (hi) q.set("max_n", hi);
-  if ($("log-mode").value) q.set("mode", $("log-mode").value);
   try {
-    const { data } = await api("GET", `/api/sessions?${q}`);
+    const data = await db.listSessions({ limit: PAGE, offset: logItems.length, sort: $("log-sort").value,
+      min_n: lo ? +lo : null, max_n: hi ? +hi : null, mode: $("log-mode").value || null });
     logItems = logItems.concat(data.items);
     logTotal = data.total;
     renderLog();
@@ -617,7 +602,7 @@ async function deleteSession(id, r) {
   const unit = r?.mode === "pick" ? "rounds" : "tosses";
   const what = r ? `${r.label ? `“${r.label}” ` : ""}(${fmtInt(r.n_tosses)} ${unit}, ${fmtDate(r.created_at)})` : "this session";
   if (!(await confirmDialog(`Delete ${what}? This can’t be undone.`))) return false;
-  try { await api("DELETE", `/api/sessions/${id}`); }
+  try { await db.deleteSession(id); }
   catch (err) { alert(err.message); return false; }
   if (lastResult?.id === id) { lastResult = null; $("toss-result").innerHTML = ""; }
   return true;
@@ -629,7 +614,7 @@ async function loadSession(id) {
   $("session-body").innerHTML = `<div class="empty">Loading…</div>`;
   $("session-delete").hidden = true;
   try {
-    const { data } = await api("GET", `/api/sessions/${id}`);
+    const data = await db.getSession(id);
     current = data;
     $("title").textContent = data.label || "Session";
     renderSession($("session-body"), data, "detail");
@@ -649,7 +634,7 @@ const normPdf = (z) => Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI);
 
 async function loadStats() {
   try {
-    const { data } = await api("GET", "/api/stats/lifetime");
+    const data = await db.lifetimeStats();
     lifetimeData = data;
     renderStats(data);
   } catch (err) {
@@ -679,13 +664,24 @@ function pickStatsHtml(P) {
   </div>`;
 }
 
+const DATA_CARD = `<div class="card">
+    <h2>Your data</h2>
+    <div class="hint">Sessions are saved in this browser on this device only. Export a backup now and then, or to move your history to another device.</div>
+    <div class="pick-actions" style="margin-top:12px">
+      <button type="button" id="data-export" class="secondary">Export backup</button>
+      <button type="button" id="data-import" class="secondary">Import…</button>
+    </div>
+    <input type="file" id="data-file" accept="application/json,.json" hidden>
+    <div id="data-msg" class="hint" role="status" style="margin-top:10px"></div>
+  </div>`;
+
 function renderStats(L) {
   const body = $("stats-body");
   const pickCard = L.pick ? pickStatsHtml(L.pick) : "";
   if (!L.sessions) {
-    body.innerHTML = L.pick
+    body.innerHTML = (L.pick
       ? `<div class="empty">No simulated sessions yet.</div>${pickCard}`
-      : `<div class="empty">No sessions yet. Lifetime stats appear after your first toss.</div>`;
+      : `<div class="empty">No sessions yet. Lifetime stats appear after your first toss.</div>`) + DATA_CARD;
     return;
   }
   const d = pctDigits(L.tosses), R = L.records, ls = L.longest_streak;
@@ -723,7 +719,8 @@ function renderStats(L) {
       ${recordLink(R.longest_heads, "Longest heads streak", `${fmtInt(R.longest_heads.length)}`)}
       ${recordLink(R.longest_tails, "Longest tails streak", `${fmtInt(R.longest_tails.length)}`)}
     </ul></div>
-    ${pickCard}`;
+    ${pickCard}
+    ${DATA_CARD}`;
   cumulativeChart(L);
   zChart(L);
 }
@@ -783,6 +780,39 @@ function zChart(L) {
   });
 }
 
+$("stats-body").addEventListener("click", async (e) => {
+  const msg = $("data-msg");
+  if (e.target.id === "data-import") { $("data-file").click(); return; }
+  if (e.target.id !== "data-export") return;
+  try {
+    const data = await db.exportAll();
+    const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+    const name = `coinstorm-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    const file = new File([blob], name, { type: "application/json" });
+    // iPhone: the share sheet lets you save to Files or AirDrop it. Elsewhere: a normal download.
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: "Coinstorm backup" }).catch((err) => { if (err.name !== "AbortError") throw err; });
+    } else {
+      const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: name });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+    msg.textContent = `Exported ${fmtInt(data.sessions.length)} session${data.sessions.length === 1 ? "" : "s"}.`;
+  } catch (err) { msg.textContent = `Export failed: ${err.message}`; }
+});
+$("stats-body").addEventListener("change", async (e) => {
+  if (e.target.id !== "data-file" || !e.target.files[0]) return;
+  const msg = $("data-msg");
+  msg.textContent = "Importing…";
+  try {
+    const { added, skipped } = await db.importAll(JSON.parse(await e.target.files[0].text()));
+    await loadStats();
+    $("data-msg").textContent = `Imported ${fmtInt(added)} session${added === 1 ? "" : "s"}` + (skipped ? `, skipped ${fmtInt(skipped)} already here or unreadable.` : ".");
+  } catch (err) {
+    msg.textContent = `Import failed: ${err instanceof SyntaxError ? "that file isn’t valid JSON." : err.message}`;
+  }
+});
+
 /* ---------- routing ---------- */
 function route() {
   const h = location.hash.replace(/^#/, "") || "toss";
@@ -807,15 +837,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (!$("view-stats").hidden && lifetimeData) renderStats(lifetimeData);
 });
 
-async function resumeJob() {
-  try {
-    const { data } = await api("GET", "/api/jobs");
-    if (data.active) trackJob(data.active.id);
-  } catch { /* offline: nothing to resume */ }
-}
-
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 setMode(recall("mode") || "simulate");
 route();
-resumeJob();
 checkPickResume();

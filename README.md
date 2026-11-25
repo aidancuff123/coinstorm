@@ -3,44 +3,44 @@
 An iPhone-first PWA coin toss simulator. It tosses up to 2,147,483,647 cryptographically random coins
 per session, computes exact statistics, logs every session, and tracks lifetime analytics.
 
-Live at **https://coinstorm.duckdns.org**. Source: https://github.com/aidancuff123/coinstorm (private). The VM pushes
-with a repo-only deploy key, `~/.ssh/coinstorm_deploy`. Runs on the GCP VM `coinstorm-dev` (project
-`coinstorm-sim-2026`, e2-micro, static IP 34.138.75.129).
+Live at **https://aidancuff123.github.io/coinstorm/**, a static site on GitHub Pages. There is no
+server: tossing, analysis and storage all happen in the browser on your device. It works offline once
+it has loaded.
+
+(It used to run as a FastAPI + SQLite server on the GCP VM `coinstorm-dev`. That version is in git
+history up to commit `955d0d4`.)
 
 ## How it works
 
-- **Randomness:** each toss is one bit from `os.urandom` (the kernel CSPRNG). On this VM urandom
-  supplies 2.0 billion flips/s, so it is not the bottleneck and the seeded-PCG64 fallback is unused.
-- **Exact stats in bounded memory:** tosses are generated and analysed in 128K-flip chunks
-  (`app/sim.py`). The run in progress at a chunk boundary is carried into the next chunk, so streaks,
-  runs and histograms are exact. The tests check this against a naive one-toss-at-a-time implementation.
-- **Benchmark (max run, 2,147,483,647 tosses), measured on the original e2-standard-4:** 10.1 s and 36 MB peak RSS standalone; 14.0 s and
-  70 MB peak for the whole server when run through the API. 128K chunks were both fastest and smallest:
-  64M chunks used 747 MB and ran 2.8× slower. Re-run with `.venv/bin/python scripts/bench.py max`
-  (other modes: `rng`, `chunks`).
-- **Background jobs:** runs over 1,000,000 tosses return a job id. The page polls `GET /api/jobs/{id}`
-  for progress and an ETA. Only one job runs at a time; a second large request gets `409`. Job state
-  lives in memory, so a restart mid-job loses that job (nothing partial is saved).
-- **Storage:** SQLite in WAL mode, `coinstorm.db` in the project directory. The raw sequence is stored
-  only for runs of 10,000 tosses or fewer. Every screen redraws from stored data; nothing is re-simulated.
+- **Randomness:** each toss is one bit from `crypto.getRandomValues`, the browser's CSPRNG.
+- **Off the main thread:** every run happens in a Web Worker (`static/worker.js`), so the page stays
+  responsive. Runs over 1,000,000 tosses show a progress bar with an ETA, and the app asks the phone
+  to keep the screen on (Screen Wake Lock) because iOS pauses a backgrounded page.
+- **Exact stats in bounded memory:** random bytes are processed 64 KB (524,288 tosses) at a time
+  (`static/engine.js`), using per-byte lookup tables for run boundaries. The run in progress at a chunk
+  boundary is carried into the next chunk, so streaks, runs and histograms are exact. The tests check
+  this against a naive one-toss-at-a-time implementation, and the engine was checked against the old
+  Python/numpy version on identical random bytes: every count, position and histogram matched.
+- **Benchmark (max run, 2,147,483,647 tosses):** 8.7 s and about 53 MB in Node 22 (V8). Safari on an
+  iPhone is typically slower. Re-run with `node scripts/bench.js`.
+- **Storage:** IndexedDB in the browser, two object stores: `sessions` (one small summary row per
+  session) and `details` (running-proportion series, streak histograms, and the H/T sequence for runs
+  of 10,000 tosses or fewer). Every screen redraws from stored data; nothing is re-simulated.
 
 ```
-app/        sim.py (simulation), stats.py (z, p, runs test), db.py, jobs.py, main.py (API)
-static/     index.html, app.js, app.css, sw.js, manifest, icons/, vendor/chart.umd.min.js (Chart.js 4.5.1)
-tests/      pytest suite (sim, stats, API)
-scripts/    test.sh, bench.py, backup.py, make_icons.py
-deploy/     coinstorm.service, Caddyfile (copies of what is installed in /etc)
+static/     index.html, app.js (UI), engine.js (simulation, stats, pick mode, lifetime),
+            store.js (IndexedDB + worker), worker.js, app.css, sw.js, manifest, icons/,
+            vendor/chart.umd.min.js (Chart.js 4.5.1)
+tests/      engine.test.js (node:test, no dependencies)
+scripts/    test.sh, bench.js, export_db.py (old server DB → export file), make_icons.py
 ```
 
 ## Pick mode
 
 Each round flips two coins and you tap the one to keep. A session is 1–10,000 rounds, and you can
-finish early. When the session starts, `POST /api/picks` flips all the pairs (os.urandom) and stores
-them as a server-side draft. Finishing sends only the picks (0 = coin A, 1 = coin B), and the server
-rebuilds the kept sequence from its own stored pairs, so a client can't invent coins.
-
-Your progress is saved in localStorage, so closing the app mid-session offers **Resume**. Unfinished
-drafts expire after 7 days.
+finish early. When the session starts, every pair is flipped up front (`crypto.getRandomValues`) and
+the unfinished session, pairs and picks so far, is saved in localStorage, so closing the app
+mid-session offers **Resume**. Unfinished sessions expire after 7 days.
 
 A pick session gets the usual analysis of the kept coins, plus:
 - how many rounds were a real choice (the coins differed)
@@ -51,105 +51,49 @@ A pick session gets the usual analysis of the kept coins, plus:
 Your choices bias the kept results, so pick sessions are excluded from lifetime fairness stats
 (totals, charts, records) and get their own summary card on the Stats tab.
 
-## API
+## Your data
 
-| Method | Path | Notes |
-|---|---|---|
-| POST | `/api/sessions` | `{"n": int, "label"?: str}`. `201` with full result if n ≤ 1M, otherwise `202 {"job_id"}`. `409` if a job is running. `422` unless n is a JSON integer with 1 ≤ n ≤ 2,147,483,647. |
-| GET | `/api/jobs/{id}` | `status`, `done`, `n`, `eta_s`; adds `session` when done |
-| GET | `/api/jobs` | the running job, if any |
-| GET | `/api/sessions` | `limit`, `offset`, `sort` (`date_desc`/`date_asc`/`size_desc`/`size_asc`), `min_n`, `max_n`, `mode` (`simulate`/`pick`) |
-| GET / DELETE | `/api/sessions/{id}` | |
-| GET | `/api/stats/lifetime` | simulated sessions: totals, cumulative series, z-scores, longest streak, records; plus a `pick` summary |
-| POST | `/api/picks` | `{"n": 1–10000, "label"?: str}` → `201 {"draft_id", "n", "label", "pairs"}`; `pairs` is "AB" per round as H/T |
-| GET / DELETE | `/api/picks/{id}` | read or discard an unfinished pick session |
-| POST | `/api/picks/{id}/finish` | `{"picks": [0\|1, ...]}` (1 to n of them) → `201` full session with a `pick` object |
+Sessions are stored **in this browser on this device only**. They don't sync between devices, and
+clearing Safari's website data deletes them.
 
-Interactive docs: https://coinstorm.duckdns.org/api/docs
+- **Add it to your Home Screen.** Safari can delete storage for websites you haven't opened in 7 days.
+  Home Screen apps are exempt.
+- **Stats → Your data → Export backup** saves everything as one JSON file (on iPhone through the share
+  sheet: Save to Files, AirDrop, …). **Import…** merges a backup back in; sessions already present are
+  skipped, so importing twice is harmless.
+
+### Moving history over from the old server
+
+```sh
+python3 scripts/export_db.py coinstorm.db coinstorm-export.json   # standard library only
+```
+
+Then import `coinstorm-export.json` on the Stats tab.
 
 ## Run locally
 
+Any static file server works, for example:
+
 ```sh
-sudo apt install python3.12-venv            # once, Ubuntu only
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-COINSTORM_DB=/tmp/dev.db .venv/bin/uvicorn --factory app.main:create_app --port 8011 --reload
+python3 -m http.server -d static 8011    # then open http://localhost:8011/
 ```
 
-Run the tests with `scripts/test.sh`. It runs pytest in a 512 MB memory-capped scope (override with
-`COINSTORM_TEST_MEM`), because an uncapped runaway test once OOM-killed the whole login session.
+Run the tests with `scripts/test.sh` (Node 18+).
 
 ## Deploy
 
-One-time setup (already done on `coinstorm-dev`):
-
-1. **GCP:** reserve the IP as static (`coinstorm-ip`). Open tcp:80,443 with the firewall rule
-   `coinstorm-allow-web`, which targets network tag `coinstorm-web`, and add that tag to the VM.
-2. **DuckDNS:** point `coinstorm` at 34.138.75.129.
-3. **App service:**
-   ```sh
-   sudo install -m 644 deploy/coinstorm.service /etc/systemd/system/
-   sudo systemctl daemon-reload && sudo systemctl enable --now coinstorm
-   ```
-   Uvicorn listens on 127.0.0.1:8010 with exactly one worker (job state is in-process), runs as
-   `tv1109`, restarts on failure, and has a 512 MB memory cap.
-4. **Caddy:** installed from the official apt repo (`/etc/apt/sources.list.d/caddy-stable.list`).
-   ```sh
-   sudo install -m 644 deploy/Caddyfile /etc/caddy/Caddyfile
-   sudo -u caddy caddy validate --config /etc/caddy/Caddyfile
-   sudo systemctl reload caddy
-   ```
-   Caddy obtains and renews the Let's Encrypt certificate and redirects HTTP to HTTPS.
-   The stock config is saved at `/etc/caddy/Caddyfile.default.bak`.
-
-Updating the app:
-
-```sh
-git pull                                    # or commit locally
-scripts/test.sh
-sudo systemctl restart coinstorm            # interrupts a running job, if any
-```
+Every push to `main` runs the tests and publishes `static/` to GitHub Pages
+(`.github/workflows/pages.yml`). One-time setup: **Settings → Pages → Source: GitHub Actions**.
 
 If you change anything in `static/`, also bump `VERSION` in `static/sw.js`. Installed copies of the
-app pick up the new shell on their next launch.
-
-Logs: `journalctl -u coinstorm -f` (app), `/var/log/caddy/coinstorm.log` (access).
-
-## Backup and restore
-
-`scripts/backup.py` uses SQLite's online backup API, so it is safe while the app is running. It writes
-`backups/coinstorm-YYYYmmdd-HHMMSS.db`, runs an integrity check, and keeps the newest 14 copies:
-
-```sh
-.venv/bin/python scripts/backup.py              # --dest DIR, --keep N
-```
-
-Don't back up by copying `coinstorm.db` alone while the service is running: recent writes may still
-be in `coinstorm.db-wal`.
-
-To run it nightly, add this line with `crontab -e`:
-
-```
-15 3 * * * cd /home/tv1109/projects/coinstorm && .venv/bin/python scripts/backup.py >> backups/backup.log 2>&1
-```
-
-Backups stay on the VM's disk, so copy them off the VM too, e.g.
-`gcloud storage cp backups/*.db gs://<bucket>/`.
-
-Restore:
-
-```sh
-sudo systemctl stop coinstorm
-cp backups/coinstorm-YYYYmmdd-HHMMSS.db coinstorm.db && rm -f coinstorm.db-wal coinstorm.db-shm
-sudo systemctl start coinstorm
-```
+app pick up the new shell on their next launch. All paths are relative, so the app works at any base
+path.
 
 ## Install on iPhone
 
-Open https://coinstorm.duckdns.org in Safari → Share → **Add to Home Screen**. It launches standalone
-(no Safari UI) and caches the app shell for fast startup. Tossing still needs the network.
+Open https://aidancuff123.github.io/coinstorm/ in Safari → Share → **Add to Home Screen**. It launches
+standalone (no Safari UI) and works offline.
 
 ## Later
 
-Biased-coin mode, CSV export, coin-edge easter egg (~1 in 6,000), side-by-side session comparison,
-optional light access protection.
+Biased-coin mode, CSV export, coin-edge easter egg (~1 in 6,000), side-by-side session comparison.
